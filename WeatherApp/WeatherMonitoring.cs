@@ -11,6 +11,7 @@ using Microsoft.Azure.KeyVault;
 using System.Data.SqlClient;
 using System.Data;
 using Microsoft.IdentityModel.Clients.ActiveDirectory;
+using System.Linq;
 
 namespace WeatherMonitoring
 {
@@ -64,21 +65,23 @@ namespace WeatherMonitoring
                 string sunrise = UnixTimeStampToDateTime(wR.sys.sunrise).ToString();
                 string sunset = UnixTimeStampToDateTime(wR.sys.sunset).ToString();
                 string dt = UnixTimeStampToDateTime(wR.dt).ToString();
-                string queryStatement = $"INSERT INTO weather_entries (base, visibility, dt, name, cod, main_temp, main_feels_like, main_temp_min, main_temp_max, main_pressure, " +
-                    $"main_humidity, wind_speed, wind_deg, clouds_all, sys_type, sys_id, sys_country, sys_sunrise, sys_sunset) VALUES (\'{wR.Base}\', {wR.visibility}, \'{dt}\', \'{wR.name}\'," +
-                    $" {wR.cod}, {wR.main.temp}, {wR.main.feels_like}, {wR.main.temp_min}, {wR.main.temp_max}, {wR.main.pressure}, {wR.main.humidity}, {wR.wind.speed}," +
-                    $"{wR.wind.deg}, {wR.clouds.all}, {wR.sys.type}, {wR.sys.id}, \'{wR.sys.country}\', \'{sunrise}\', \'{sunset}\')";
-                SqlCommand _cmd = new SqlCommand(queryStatement, _con);
+                string weather_data_value = String.Join(",", (from x in wR.weather select String.Format("(@WEATHERENTRIESID, \'{0}\', \'{1}\', \'{2}\')", x.main, x.description, x.icon)).ToArray());
+                string template = string.Format("DECLARE @WEATHERENTRIESID int; \n"
+                    + "BEGIN TRANSACTION [Tran1] \n"
+                   + "BEGIN TRY \n"
+                        + "INSERT INTO weather_entries(base, visibility, dt, name, cod, main_temp, main_feels_like, main_temp_min, main_temp_max, main_pressure, main_humidity, \n"
+                         + "wind_speed, wind_deg, clouds_all, sys_type, sys_id, sys_country, sys_sunrise, sys_sunset, lon, lat) VALUES(\'{0}\', {1}, \'{2}\', \'{3}\', {4}, {5}, {6}, {7}, {8}, {9}, {10}, {11}, {12}, {13}, {14}, {15}, \'{16}\', \'{17}\', \'{18}\', {19}, {20} ) \n"
+                        + "SET @WEATHERENTRIESID = SCOPE_IDENTITY() \n"
+                        + "INSERT INTO weather_data(weather_entries_id, main, description, icon) VALUES {21} \n"
+                    + "COMMIT TRANSACTION[Tran1] \n"
+                    + "END TRY \n"
+                 + "BEGIN CATCH \n"
+                   + "ROLLBACK TRANSACTION[Tran1] \n"
+                + "END CATCH", wR.Base, wR.visibility, dt, wR.name, wR.cod, wR.main.temp, wR.main.feels_like, wR.main.temp_min, wR.main.temp_max, wR.main.pressure, wR.main.humidity,
+                 wR.wind.speed, wR.wind.deg, wR.clouds.all, wR.sys.type, wR.sys.id, wR.sys.country, sunrise, sunset, wR.coord.lon, wR.coord.lat, weather_data_value);
+                SqlCommand _cmd = new SqlCommand(template, _con);
                 _cmd.ExecuteNonQuery();
-
-                foreach (var item in wR.weather)
-                {
-                    queryStatement = $"INSERT INTO weather_data(weather_entries_id, main, description, icon) VALUES((SELECT TOP 1 id FROM weather_entries ORDER BY id DESC), \'{item.main}\', \'{item.description}\', \'{item.icon}\')";
-                    _cmd = new SqlCommand(queryStatement, _con);
-                    _cmd.ExecuteNonQuery();
-                }
                 _con.Close();
-
                 httpResponse.Content = new StringContent(JsonConvert.SerializeObject(wR).ToString(), System.Text.Encoding.UTF8, "application/json");
                 return httpResponse;
             }
@@ -90,7 +93,10 @@ namespace WeatherMonitoring
 
         }
 
-        //Convert unix timestamp to date time
+        /*
+         * Convert unix timestamp to date time
+         * @unixTimeStamp: unix time stamp
+         */
         public static DateTime UnixTimeStampToDateTime(long unixTimeStamp)
         {
             // Unix timestamp is seconds past epoch

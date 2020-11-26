@@ -5,7 +5,7 @@ namespace WeatherMonitoring
 {
     class WeatherResponse
     {
-
+        public Coord coord { get; set; }
         public List<Weather> weather { get; set; }
         public Main main { get; set; }
         public Wind wind { get; set; }
